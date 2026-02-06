@@ -224,7 +224,7 @@ class UserDailyTimeInterval(db.Model):
     last_modified = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationship back to user
-    user = db.relationship('ManagedUser', backref='time_intervals')
+    user = db.relationship('ManagedUser', backref=db.backref('time_intervals', cascade='all, delete-orphan'))
     
     # Constraint to ensure only one interval per user per day
     __table_args__ = (
