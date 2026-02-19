@@ -640,4 +640,16 @@ with app.app_context():
     print("Background tasks started automatically")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    # Load host and port from config.json
+    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        host = config.get('host', '0.0.0.0')
+        port = config.get('port', 5000)
+    except Exception as e:
+        print(f"[WARNING] Impossibile leggere config.json: {e}. Uso valori di default.")
+        host = '0.0.0.0'
+        port = 5000
+
+    app.run(host=host, port=port, debug=False, use_reloader=False)

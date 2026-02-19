@@ -84,15 +84,10 @@ sudo usermod -aG timekpr timekpr-remote
 # Create SSH directory for the user
 sudo mkdir -p /home/timekpr-remote/.ssh
 sudo chmod 700 /home/timekpr-remote/.ssh
+sudo chown timekpr-remote:timekpr-remote /home/timekpr-remote/.ssh
 
 # Copy your public key from the WebUI host
-scp ./ssh/timekpr_ui_key.pub user@TARGET_COMPUTER_IP:/tmp/
-
-# On the remote computer, add the key to authorized_keys
-sudo cat /tmp/timekpr_ui_key.pub >> /home/timekpr-remote/.ssh/authorized_keys
-sudo chmod 600 /home/timekpr-remote/.ssh/authorized_keys
-sudo chown -R timekpr-remote:timekpr-remote /home/timekpr-remote/.ssh
-sudo rm /tmp/timekpr_ui_key.pub
+ssh-copy-id -i ./ssh/timekpr_ui_key.pub timekpr-remote@TARGET_COMPUTER_IP
 ```
 
 #### Verify SSH key access:
@@ -121,6 +116,10 @@ If you prefer to run without Docker:
 # Clone repository
 git clone https://github.com/yourusername/timekpr-ui.git
 cd timekpr-ui
+
+# Create and activate a virtual environment
+python3.11 -m venv venv
+source venv/bin/activate
 
 # Install Python dependencies
 pip install -r requirements.txt
