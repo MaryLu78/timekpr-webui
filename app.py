@@ -26,8 +26,17 @@ db.init_app(app)
 task_manager = BackgroundTaskManager()
 task_manager.init_app(app)
 
-# Admin username remains hardcoded
-ADMIN_USERNAME = 'admin'
+# Load app configuration once
+config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+try:
+    with open(config_path, 'r') as f:
+        app_config = json.load(f)
+except Exception as e:
+    logging.warning(f"Impossibile leggere config.json: {e}. Uso valori di default.")
+    app_config = {}
+
+# Admin username loaded from config (fallback: admin)
+ADMIN_USERNAME = app_config.get('admin_username', 'admin')
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
@@ -641,15 +650,7 @@ with app.app_context():
 
 if __name__ == '__main__':
     # Load host and port from config.json
-    config_path = os.path.join(os.path.dirname(__file__), 'config.json')
-    try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        host = config.get('host', '0.0.0.0')
-        port = config.get('port', 5000)
-    except Exception as e:
-        print(f"[WARNING] Impossibile leggere config.json: {e}. Uso valori di default.")
-        host = '0.0.0.0'
-        port = 5000
+    host = app_config.get('host', '0.0.0.0')
+    port = app_config.get('port', 5000)
 
     app.run(host=host, port=port, debug=False, use_reloader=False)
