@@ -1,0 +1,25 @@
+[Unit]
+Description=TimeKpr WebUI (Flask + Gunicorn)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=timekpr-webui
+Group=timekpr-webui
+WorkingDirectory=/opt/timekpr-webui
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/opt/timekpr-webui/.venv/bin
+ExecStart=/opt/timekpr-webui/.venv/bin/python /opt/timekpr-webui/run_gunicorn.py
+Restart=always
+RestartSec=5
+
+# Hardening (safe defaults)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/timekpr-webui/instance
+
+[Install]
+WantedBy=multi-user.target

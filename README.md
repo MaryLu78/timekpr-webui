@@ -143,6 +143,12 @@ The application will start on `http://localhost:5000` with database at `instance
 
 **Note**: Follow the same remote system configuration steps (SSH key setup) as described above.
 
+### 4. Linux service deployment (systemd)
+
+For production deployment on Linux with automatic startup at boot, see:
+
+- [docs/deploy/linux-systemd.md](docs/deploy/linux-systemd.md)
+
 ---
 
 ## 📊 Daily Usage
