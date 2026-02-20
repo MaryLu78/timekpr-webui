@@ -1,5 +1,6 @@
 {
   "admin_username": "admin",
+  "session_secret_key": "CHANGE_ME_WITH_A_LONG_RANDOM_SECRET",
   "host": "127.0.0.1",
   "port": 5000
 }

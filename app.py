@@ -16,7 +16,6 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///timekpr.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -35,6 +34,18 @@ try:
 except Exception as e:
     logging.warning(f"Impossibile leggere config.json: {e}. Uso valori di default.")
     app_config = {}
+
+# Stable secret key (required for consistent sessions across gunicorn workers)
+app.secret_key = (
+    os.environ.get('TIMEKPR_SESSION_SECRET_KEY')
+    or os.environ.get('TIMEKPR_SECRET_KEY')
+    or app_config.get('session_secret_key')
+    or app_config.get('secret_key')
+    or 'CHANGE_THIS_TIMEKPR_SECRET_KEY_IN_CONFIG'
+)
+
+if app.secret_key == 'CHANGE_THIS_TIMEKPR_SECRET_KEY_IN_CONFIG':
+    logging.warning('Using default Flask secret key. Set "session_secret_key" in config.json or TIMEKPR_SESSION_SECRET_KEY env variable.')
 
 # Admin username loaded from config (fallback: admin)
 ADMIN_USERNAME = app_config.get('admin_username', 'admin')
