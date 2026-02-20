@@ -192,10 +192,21 @@
             color: var(--text-primary);
             font-size: var(--font-size-sm);
         }
+
+        .interval-time .time-select {
+            width: 74px;
+            min-width: 74px;
+            text-align: center;
+        }
         
         .time-select:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+
+        .time-select.invalid-time {
+            border-color: var(--danger);
+            box-shadow: 0 0 0 2px rgb(239 68 68 / 0.2);
         }
         
         .actions-section {
@@ -339,17 +350,9 @@
                 </div>
                 <div class="quick-control">
                     <label>Quick set interval:</label>
-                    <select id="bulk-start" class="time-select">
-                        {% for h in range(24) %}
-                        <option value="{{ h }}" {% if h == 9 %}selected{% endif %}>{{ '%02d:00'|format(h) }}</option>
-                        {% endfor %}
-                    </select>
+                    <input type="text" id="bulk-start" class="time-select" value="09:00" placeholder="HH:MM" maxlength="5" inputmode="numeric">
                     <span>to</span>
-                    <select id="bulk-end" class="time-select">
-                        {% for h in range(24) %}
-                        <option value="{{ h }}" {% if h == 17 %}selected{% endif %}>{{ '%02d:00'|format(h) }}</option>
-                        {% endfor %}
-                    </select>
+                    <input type="text" id="bulk-end" class="time-select" value="17:00" placeholder="HH:MM" maxlength="5" inputmode="numeric">
                     <button type="button" class="btn btn-sm btn-secondary" onclick="setWeekdayIntervals()">Weekdays</button>
                     <button type="button" class="btn btn-sm btn-secondary" onclick="setWeekendIntervals()">Weekends</button>
                     <button type="button" class="btn btn-sm btn-secondary" onclick="setAllIntervals()">All Days</button>
@@ -406,17 +409,9 @@
                                     <label for="interval-{{ day_num }}">Enable</label>
                                 </div>
                                 <div class="interval-time">
-                                    <select id="start-{{ day_num }}" class="time-select" disabled>
-                                        {% for h in range(24) %}
-                                        <option value="{{ h }}">{{ '%02d:00'|format(h) }}</option>
-                                        {% endfor %}
-                                    </select>
+                                    <input type="text" id="start-{{ day_num }}" class="time-select" value="09:00" placeholder="HH:MM" maxlength="5" inputmode="numeric" disabled>
                                     <span>to</span>
-                                    <select id="end-{{ day_num }}" class="time-select" disabled>
-                                        {% for h in range(24) %}
-                                        <option value="{{ h }}">{{ '%02d:00'|format(h) }}</option>
-                                        {% endfor %}
-                                    </select>
+                                    <input type="text" id="end-{{ day_num }}" class="time-select" value="17:00" placeholder="HH:MM" maxlength="5" inputmode="numeric" disabled>
                                 </div>
                             </div>
                         </div>
@@ -539,6 +534,8 @@
         
         // Load intervals on page load
         document.addEventListener('DOMContentLoaded', function() {
+            bindIntervalValidationEvents();
+            validateBulkIntervalInputs();
             loadIntervals();
         });
         
@@ -576,48 +573,168 @@
         }
         
         // Interval functions
+        function formatTime(hour, minute) {
+            return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        }
+
+        function parseTimeValue(value) {
+            const text = (value || '').trim();
+            const match = text.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+            if (!match) {
+                return null;
+            }
+
+            const hour = parseInt(match[1], 10);
+            const minute = parseInt(match[2], 10);
+            return {
+                hour,
+                minute,
+                total: hour * 60 + minute
+            };
+        }
+
+        function setInputValidity(inputEl, isValid) {
+            if (!inputEl) return;
+            inputEl.classList.toggle('invalid-time', !isValid);
+        }
+
+        function validateIntervalRow(day) {
+            const enabled = document.getElementById(`interval-${day}`).checked;
+            const startInput = document.getElementById(`start-${day}`);
+            const endInput = document.getElementById(`end-${day}`);
+
+            const parsedStart = parseTimeValue(startInput.value);
+            const parsedEnd = parseTimeValue(endInput.value);
+
+            const startValid = !!parsedStart;
+            const endValid = !!parsedEnd;
+            setInputValidity(startInput, startValid);
+            setInputValidity(endInput, endValid);
+
+            if (enabled && startValid && endValid) {
+                const rowValid = parsedStart.total < parsedEnd.total;
+                setInputValidity(startInput, rowValid);
+                setInputValidity(endInput, rowValid);
+                return rowValid;
+            }
+
+            return !enabled || (startValid && endValid);
+        }
+
+        function validateBulkIntervalInputs() {
+            const bulkStartInput = document.getElementById('bulk-start');
+            const bulkEndInput = document.getElementById('bulk-end');
+
+            const parsedStart = parseTimeValue(bulkStartInput.value);
+            const parsedEnd = parseTimeValue(bulkEndInput.value);
+            const isValid = !!parsedStart && !!parsedEnd && parsedStart.total < parsedEnd.total;
+
+            setInputValidity(bulkStartInput, isValid);
+            setInputValidity(bulkEndInput, isValid);
+            return isValid;
+        }
+
+        function bindIntervalValidationEvents() {
+            for (let day = 1; day <= 7; day++) {
+                const startInput = document.getElementById(`start-${day}`);
+                const endInput = document.getElementById(`end-${day}`);
+                const checkbox = document.getElementById(`interval-${day}`);
+
+                if (startInput) {
+                    startInput.addEventListener('input', () => validateIntervalRow(day));
+                    startInput.addEventListener('blur', () => validateIntervalRow(day));
+                }
+
+                if (endInput) {
+                    endInput.addEventListener('input', () => validateIntervalRow(day));
+                    endInput.addEventListener('blur', () => validateIntervalRow(day));
+                }
+
+                if (checkbox) {
+                    checkbox.addEventListener('change', () => validateIntervalRow(day));
+                }
+            }
+
+            const bulkStartInput = document.getElementById('bulk-start');
+            const bulkEndInput = document.getElementById('bulk-end');
+
+            if (bulkStartInput) {
+                bulkStartInput.addEventListener('input', validateBulkIntervalInputs);
+                bulkStartInput.addEventListener('blur', validateBulkIntervalInputs);
+            }
+
+            if (bulkEndInput) {
+                bulkEndInput.addEventListener('input', validateBulkIntervalInputs);
+                bulkEndInput.addEventListener('blur', validateBulkIntervalInputs);
+            }
+        }
+
         function toggleInterval(day) {
             const checkbox = document.getElementById(`interval-${day}`);
-            const startSelect = document.getElementById(`start-${day}`);
-            const endSelect = document.getElementById(`end-${day}`);
+            const startInput = document.getElementById(`start-${day}`);
+            const endInput = document.getElementById(`end-${day}`);
             
-            startSelect.disabled = !checkbox.checked;
-            endSelect.disabled = !checkbox.checked;
+            startInput.disabled = !checkbox.checked;
+            endInput.disabled = !checkbox.checked;
         }
         
         function setWeekdayIntervals() {
-            const startHour = document.getElementById('bulk-start').value;
-            const endHour = document.getElementById('bulk-end').value;
+            const startTime = document.getElementById('bulk-start').value;
+            const endTime = document.getElementById('bulk-end').value;
+            const parsedStart = parseTimeValue(startTime);
+            const parsedEnd = parseTimeValue(endTime);
+
+            if (!parsedStart || !parsedEnd || parsedStart.total >= parsedEnd.total) {
+                validateBulkIntervalInputs();
+                showNotification('Quick interval non valido. Usa formato HH:MM e inizio < fine.', 'error');
+                return;
+            }
             
             for (let day = 1; day <= 5; day++) {
                 document.getElementById(`interval-${day}`).checked = true;
-                document.getElementById(`start-${day}`).value = startHour;
-                document.getElementById(`end-${day}`).value = endHour;
+                document.getElementById(`start-${day}`).value = startTime;
+                document.getElementById(`end-${day}`).value = endTime;
                 toggleInterval(day);
             }
         }
         
         function setWeekendIntervals() {
-            const startHour = document.getElementById('bulk-start').value;
-            const endHour = document.getElementById('bulk-end').value;
+            const startTime = document.getElementById('bulk-start').value;
+            const endTime = document.getElementById('bulk-end').value;
+            const parsedStart = parseTimeValue(startTime);
+            const parsedEnd = parseTimeValue(endTime);
+
+            if (!parsedStart || !parsedEnd || parsedStart.total >= parsedEnd.total) {
+                validateBulkIntervalInputs();
+                showNotification('Quick interval non valido. Usa formato HH:MM e inizio < fine.', 'error');
+                return;
+            }
             
             // Apply to weekends (Saturday = 6, Sunday = 7)
             for (let day = 6; day <= 7; day++) {
                 document.getElementById(`interval-${day}`).checked = true;
-                document.getElementById(`start-${day}`).value = startHour;
-                document.getElementById(`end-${day}`).value = endHour;
+                document.getElementById(`start-${day}`).value = startTime;
+                document.getElementById(`end-${day}`).value = endTime;
                 toggleInterval(day);
             }
         }
         
         function setAllIntervals() {
-            const startHour = document.getElementById('bulk-start').value;
-            const endHour = document.getElementById('bulk-end').value;
+            const startTime = document.getElementById('bulk-start').value;
+            const endTime = document.getElementById('bulk-end').value;
+            const parsedStart = parseTimeValue(startTime);
+            const parsedEnd = parseTimeValue(endTime);
+
+            if (!parsedStart || !parsedEnd || parsedStart.total >= parsedEnd.total) {
+                validateBulkIntervalInputs();
+                showNotification('Quick interval non valido. Usa formato HH:MM e inizio < fine.', 'error');
+                return;
+            }
             
             for (let day = 1; day <= 7; day++) {
                 document.getElementById(`interval-${day}`).checked = true;
-                document.getElementById(`start-${day}`).value = startHour;
-                document.getElementById(`end-${day}`).value = endHour;
+                document.getElementById(`start-${day}`).value = startTime;
+                document.getElementById(`end-${day}`).value = endTime;
                 toggleInterval(day);
             }
         }
@@ -632,9 +749,10 @@
                             const interval = intervals[day];
                             if (interval) {
                                 document.getElementById(`interval-${day}`).checked = interval.is_enabled;
-                                document.getElementById(`start-${day}`).value = interval.start_hour;
-                                document.getElementById(`end-${day}`).value = interval.end_hour;
+                                document.getElementById(`start-${day}`).value = formatTime(interval.start_hour, interval.start_minute);
+                                document.getElementById(`end-${day}`).value = formatTime(interval.end_hour, interval.end_minute);
                                 toggleInterval(day);
+                                validateIntervalRow(day);
                             }
                         }
                     }
@@ -686,22 +804,38 @@
                 
                 for (let day = 1; day <= 7; day++) {
                     const enabled = document.getElementById(`interval-${day}`).checked;
-                    const startHour = parseInt(document.getElementById(`start-${day}`).value);
-                    const endHour = parseInt(document.getElementById(`end-${day}`).value);
-                    
-                    if (enabled && startHour >= endHour) {
-                        const error = `Invalid time range for day ${day}: start time must be before end time`;
+                    const startRaw = document.getElementById(`start-${day}`).value;
+                    const endRaw = document.getElementById(`end-${day}`).value;
+                    const parsedStart = parseTimeValue(startRaw);
+                    const parsedEnd = parseTimeValue(endRaw);
+
+                    if (!parsedStart || !parsedEnd) {
+                        setInputValidity(document.getElementById(`start-${day}`), !!parsedStart);
+                        setInputValidity(document.getElementById(`end-${day}`), !!parsedEnd);
+                        const error = `Formato orario non valido per giorno ${day}. Usa HH:MM`;
                         if (showAlert) showNotification(error, 'error');
                         reject(new Error(error));
                         return;
                     }
                     
+                    if (enabled && parsedStart.total >= parsedEnd.total) {
+                        setInputValidity(document.getElementById(`start-${day}`), false);
+                        setInputValidity(document.getElementById(`end-${day}`), false);
+                        const error = `Invalid time range for day ${day}: start time must be before end time`;
+                        if (showAlert) showNotification(error, 'error');
+                        reject(new Error(error));
+                        return;
+                    }
+
+                    setInputValidity(document.getElementById(`start-${day}`), true);
+                    setInputValidity(document.getElementById(`end-${day}`), true);
+                    
                     intervalData[day] = {
                         is_enabled: enabled,
-                        start_hour: startHour,
-                        start_minute: 0,
-                        end_hour: endHour,
-                        end_minute: 0
+                        start_hour: parsedStart.hour,
+                        start_minute: parsedStart.minute,
+                        end_hour: parsedEnd.hour,
+                        end_minute: parsedEnd.minute
                     };
                 }
                 

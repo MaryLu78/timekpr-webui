@@ -3,6 +3,7 @@ import os
 from datetime import datetime, date, timedelta
 import json
 import logging
+import re
 
 from src.database import db, ManagedUser, UserTimeUsage, Settings, UserWeeklySchedule, UserDailyTimeInterval
 from src.ssh_helper import SSHClient
@@ -37,6 +38,186 @@ except Exception as e:
 
 # Admin username loaded from config (fallback: admin)
 ADMIN_USERNAME = app_config.get('admin_username', 'admin')
+
+def _sync_weekly_schedule_from_remote_config(user, config_dict):
+    """Try to update local weekly schedule from remote timekpr config."""
+    if not config_dict:
+        return False
+
+    allowed_days_keys = [
+        'ALLOWED_WEEKDAYS',
+        'ALLOWED_DAYS',
+        'DAYS_ALLOWED',
+        'WEEK_ALLOWED_DAYS'
+    ]
+    time_limits_keys = [
+        'LIMITS_PER_WEEKDAYS',
+        'TIME_LIMITS',
+        'TIMELIMITS',
+        'DAILY_LIMITS',
+        'LIMITS_PER_DAY',
+        'LIMITS'
+    ]
+
+    allowed_days = None
+    time_limits = None
+
+    for key in allowed_days_keys:
+        if key in config_dict:
+            allowed_days = config_dict.get(key)
+            break
+
+    for key in time_limits_keys:
+        if key in config_dict:
+            time_limits = config_dict.get(key)
+            break
+
+    if not allowed_days or not time_limits:
+        return False
+
+    try:
+        if not isinstance(allowed_days, list):
+            allowed_days = [allowed_days]
+        if not isinstance(time_limits, list):
+            time_limits = [time_limits]
+
+        allowed_days = [int(day) for day in allowed_days]
+        time_limits = [int(limit) for limit in time_limits]
+    except (ValueError, TypeError):
+        return False
+
+    if not user.weekly_schedule:
+        schedule = UserWeeklySchedule(user_id=user.id)
+        db.session.add(schedule)
+        db.session.flush()
+        user.weekly_schedule = schedule
+    else:
+        schedule = user.weekly_schedule
+
+    schedule_hours = {
+        'monday': 0,
+        'tuesday': 0,
+        'wednesday': 0,
+        'thursday': 0,
+        'friday': 0,
+        'saturday': 0,
+        'sunday': 0
+    }
+    day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+    for index, day_number in enumerate(allowed_days):
+        if index >= len(time_limits):
+            break
+        if 1 <= day_number <= 7:
+            schedule_hours[day_names[day_number - 1]] = round(time_limits[index] / 3600, 2)
+
+    schedule.set_schedule_from_dict(schedule_hours)
+    schedule.mark_synced()
+    return True
+
+def _parse_allowed_hours_interval(raw_value):
+    """Parse timekpr ALLOWED_HOURS_X value and return (start_h, start_m, end_h, end_m, is_enabled)."""
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, list):
+        tokens = [str(token).strip() for token in raw_value if str(token).strip()]
+    else:
+        tokens = [token.strip() for token in str(raw_value).split(';') if token.strip()]
+
+    if not tokens:
+        return None
+
+    ranges = []
+    for token in tokens:
+        match = re.match(r'^(\d{1,2})(?:\[(\d{1,2})-(\d{1,2})\])?$', token)
+        if not match:
+            continue
+
+        hour = int(match.group(1))
+        start_minute = int(match.group(2)) if match.group(2) is not None else 0
+        end_minute = int(match.group(3)) if match.group(3) is not None else 59
+
+        if not (0 <= hour <= 23 and 0 <= start_minute <= 59 and 0 <= end_minute <= 59):
+            continue
+        if start_minute > end_minute:
+            continue
+
+        start_total = hour * 60 + start_minute
+        end_total = hour * 60 + end_minute
+        ranges.append((start_total, end_total))
+
+    if not ranges:
+        return None
+
+    ranges.sort(key=lambda value: value[0])
+    merged = [ranges[0]]
+    for current_start, current_end in ranges[1:]:
+        last_start, last_end = merged[-1]
+        if current_start <= last_end + 1:
+            merged[-1] = (last_start, max(last_end, current_end))
+        else:
+            merged.append((current_start, current_end))
+
+    full_day_access = len(merged) == 1 and merged[0][0] == 0 and merged[0][1] == 1439
+    if full_day_access:
+        return 9, 0, 17, 0, False
+
+    start_total, end_total = merged[0][0], merged[-1][1]
+
+    # Convert inclusive remote end minute to boundary-style end time for UI
+    # Example: remote 22:59 becomes UI 23:00
+    if end_total < 1439:
+        end_total += 1
+    start_hour, start_minute = divmod(start_total, 60)
+    end_hour, end_minute = divmod(end_total, 60)
+
+    return start_hour, start_minute, end_hour, end_minute, True
+
+def _sync_intervals_from_remote_config(user, config_dict):
+    """Sync ALLOWED_HOURS_X from remote config into local intervals table."""
+    if not config_dict:
+        return False
+
+    synced_any = False
+    for day_of_week in range(1, 8):
+        key = f'ALLOWED_HOURS_{day_of_week}'
+        if key not in config_dict:
+            continue
+
+        parsed = _parse_allowed_hours_interval(config_dict.get(key))
+        if parsed is None:
+            continue
+
+        start_hour, start_minute, end_hour, end_minute, is_enabled = parsed
+
+        interval = UserDailyTimeInterval.query.filter_by(
+            user_id=user.id,
+            day_of_week=day_of_week
+        ).first()
+
+        if not interval:
+            interval = UserDailyTimeInterval(
+                user_id=user.id,
+                day_of_week=day_of_week,
+                start_hour=start_hour,
+                start_minute=start_minute,
+                end_hour=end_hour,
+                end_minute=end_minute,
+                is_enabled=is_enabled
+            )
+            db.session.add(interval)
+        else:
+            interval.start_hour = start_hour
+            interval.start_minute = start_minute
+            interval.end_hour = end_hour
+            interval.end_minute = end_minute
+            interval.is_enabled = is_enabled
+
+        interval.mark_synced()
+        synced_any = True
+
+    return synced_any
 
 @app.route('/', methods=['GET', 'POST'])
 def login():
@@ -284,6 +465,108 @@ def validate_user(user_id):
     
     return redirect(url_for('admin'))
 
+@app.route('/users/pull-config/<int:user_id>', methods=['POST'])
+def pull_user_config(user_id):
+    """Pull remote user configuration and save it to local DB."""
+    if not session.get('logged_in'):
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    user = ManagedUser.query.get_or_404(user_id)
+    ssh_client = SSHClient(hostname=user.system_ip)
+
+    is_valid, message, config_dict = ssh_client.validate_user(user.username)
+    user.last_checked = datetime.utcnow()
+
+    if not is_valid or not config_dict:
+        db.session.commit()
+        flash(f'Failed to pull config for {user.username}: {message}', 'danger')
+        return redirect(request.referrer or url_for('dashboard'))
+
+    user.is_valid = True
+    user.last_config = json.dumps(config_dict)
+
+    today = date.today()
+    time_spent = config_dict.get('TIME_SPENT_DAY', 0)
+    usage = UserTimeUsage.query.filter_by(user_id=user.id, date=today).first()
+    if usage:
+        usage.time_spent = time_spent
+    else:
+        db.session.add(UserTimeUsage(user_id=user.id, date=today, time_spent=time_spent))
+
+    schedule_synced = _sync_weekly_schedule_from_remote_config(user, config_dict)
+    intervals_synced = _sync_intervals_from_remote_config(user, config_dict)
+    db.session.commit()
+
+    if schedule_synced and intervals_synced:
+        flash(f'Pulled remote config for {user.username} and updated schedule + intervals', 'success')
+    elif schedule_synced:
+        flash(f'Pulled remote config for {user.username} and updated local schedule', 'success')
+    elif intervals_synced:
+        flash(f'Pulled remote config for {user.username} and updated local intervals', 'success')
+    else:
+        flash(f'Pulled remote config for {user.username}', 'success')
+
+    return redirect(request.referrer or url_for('dashboard'))
+
+@app.route('/users/push-config/<int:user_id>', methods=['POST'])
+def push_user_config(user_id):
+    """Push local user configuration to remote timekpr."""
+    if not session.get('logged_in'):
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+
+    user = ManagedUser.query.get_or_404(user_id)
+    ssh_client = SSHClient(hostname=user.system_ip)
+
+    messages = []
+    has_success = False
+
+    if user.weekly_schedule:
+        schedule_dict = user.weekly_schedule.get_schedule_dict()
+        success, message = ssh_client.set_weekly_time_limits(user.username, schedule_dict)
+        if success:
+            user.weekly_schedule.mark_synced()
+            has_success = True
+            messages.append('weekly limits synced')
+        else:
+            messages.append(f'weekly limits failed: {message}')
+
+    intervals = UserDailyTimeInterval.query.filter_by(user_id=user.id).all()
+    if intervals:
+        intervals_dict = {interval.day_of_week: interval for interval in intervals}
+        success, message = ssh_client.set_allowed_hours(user.username, intervals_dict)
+        if success:
+            for interval in intervals:
+                interval.mark_synced()
+            has_success = True
+            messages.append('allowed hours synced')
+        else:
+            messages.append(f'allowed hours failed: {message}')
+
+    if not user.weekly_schedule and not intervals:
+        flash(f'No local config to push for {user.username}', 'warning')
+        return redirect(request.referrer or url_for('dashboard'))
+
+    is_valid, _, config_dict = ssh_client.validate_user(user.username)
+    if is_valid and config_dict:
+        user.last_checked = datetime.utcnow()
+        user.last_config = json.dumps(config_dict)
+        today = date.today()
+        time_spent = config_dict.get('TIME_SPENT_DAY', 0)
+        usage = UserTimeUsage.query.filter_by(user_id=user.id, date=today).first()
+        if usage:
+            usage.time_spent = time_spent
+        else:
+            db.session.add(UserTimeUsage(user_id=user.id, date=today, time_spent=time_spent))
+
+    db.session.commit()
+
+    if has_success:
+        flash(f'Pushed config for {user.username}: {"; ".join(messages)}', 'success')
+    else:
+        flash(f'Failed to push config for {user.username}: {"; ".join(messages)}', 'danger')
+
+    return redirect(request.referrer or url_for('dashboard'))
+
 @app.route('/users/delete/<int:user_id>', methods=['POST'])
 def delete_user(user_id):
     if not session.get('logged_in'):
@@ -452,6 +735,58 @@ def update_user_intervals(user_id):
                 day_of_week = int(day_str)
                 if not (1 <= day_of_week <= 7):
                     continue
+
+                def parse_hhmm(value):
+                    if value is None:
+                        return None
+                    match = re.match(r'^([01]\d|2[0-3]):([0-5]\d)$', str(value).strip())
+                    if not match:
+                        return None
+                    return int(match.group(1)), int(match.group(2))
+
+                start_hhmm = parse_hhmm(interval_data.get('start_time'))
+                end_hhmm = parse_hhmm(interval_data.get('end_time'))
+
+                if interval_data.get('start_time') is not None and start_hhmm is None:
+                    return jsonify({
+                        'success': False,
+                        'message': f'Invalid start time format for day {day_of_week}. Expected HH:MM'
+                    }), 400
+
+                if interval_data.get('end_time') is not None and end_hhmm is None:
+                    return jsonify({
+                        'success': False,
+                        'message': f'Invalid end time format for day {day_of_week}. Expected HH:MM'
+                    }), 400
+
+                if start_hhmm is not None:
+                    start_hour, start_minute = start_hhmm
+                else:
+                    start_hour = int(interval_data.get('start_hour', 9))
+                    start_minute = int(interval_data.get('start_minute', 0))
+
+                if end_hhmm is not None:
+                    end_hour, end_minute = end_hhmm
+                else:
+                    end_hour = int(interval_data.get('end_hour', 17))
+                    end_minute = int(interval_data.get('end_minute', 0))
+
+                if not (0 <= start_hour <= 23 and 0 <= end_hour <= 23 and 0 <= start_minute <= 59 and 0 <= end_minute <= 59):
+                    return jsonify({
+                        'success': False,
+                        'message': f'Invalid time values for day {day_of_week}. Hours must be 00-23 and minutes 00-59'
+                    }), 400
+
+                is_enabled = bool(interval_data.get('is_enabled', False))
+
+                start_total = start_hour * 60 + start_minute
+                end_total = end_hour * 60 + end_minute
+
+                if is_enabled and start_total >= end_total:
+                    return jsonify({
+                        'success': False,
+                        'message': f'Invalid time interval for day {day_of_week}: start time must be before end time'
+                    }), 400
                 
                 # Get or create interval for this day
                 interval = UserDailyTimeInterval.query.filter_by(
@@ -467,11 +802,11 @@ def update_user_intervals(user_id):
                     db.session.add(interval)
                 
                 # Update interval properties
-                interval.start_hour = int(interval_data.get('start_hour', 9))
-                interval.start_minute = int(interval_data.get('start_minute', 0))
-                interval.end_hour = int(interval_data.get('end_hour', 17))
-                interval.end_minute = int(interval_data.get('end_minute', 0))
-                interval.is_enabled = bool(interval_data.get('is_enabled', False))
+                interval.start_hour = start_hour
+                interval.start_minute = start_minute
+                interval.end_hour = end_hour
+                interval.end_minute = end_minute
+                interval.is_enabled = is_enabled
                 
                 # Validate the interval
                 if not interval.is_valid_interval():

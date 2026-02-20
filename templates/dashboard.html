@@ -171,6 +171,12 @@
                             <div class="user-actions">
                                 <button class="btn btn-primary" onclick="openTimeAdjustModal({{ user.id }}, '{{ user.username }}')">Adjust Time</button>
                                 <a href="{{ url_for('weekly_schedule_user', user_id=user.id) }}" class="btn btn-secondary">Schedule</a>
+                                <form action="{{ url_for('pull_user_config', user_id=user.id) }}" method="POST" style="display: inline;">
+                                    <button type="submit" class="btn btn-secondary">Pull Config</button>
+                                </form>
+                                <form action="{{ url_for('push_user_config', user_id=user.id) }}" method="POST" style="display: inline;">
+                                    <button type="submit" class="btn btn-secondary">Push Config</button>
+                                </form>
                             </div>
                         </div>
                             

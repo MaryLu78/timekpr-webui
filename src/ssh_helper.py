@@ -94,7 +94,7 @@ class SSHClient:
         config_dict = {}
         
         # Regular expression to match key-value pairs
-        pattern = r'([A-Z_]+):\s*(.*)'
+        pattern = r'([A-Z0-9_]+):\s*(.*)'
         
         for line in output.split('\n'):
             match = re.search(pattern, line)

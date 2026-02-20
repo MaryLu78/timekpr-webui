@@ -22,3 +22,4 @@ instance/
 
 # Claude Code project instructions (local development only)
 CLAUDE.md
+.vscode/settings.json
